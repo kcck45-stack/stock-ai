@@ -5,3 +5,4 @@ numpy<2.0.0
 requests
 tensorflow
 scikit-learn
+pip install finance-datareader
