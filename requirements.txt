@@ -1,6 +1,7 @@
 yfinance
-numpy<2.0.0
+pykrx
 pandas
-scikit-learn
-tensorflow
+numpy<2.0.0
 requests
+tensorflow
+scikit-learn
