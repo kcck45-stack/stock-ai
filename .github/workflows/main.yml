@@ -4,22 +4,27 @@ on:
   schedule:
     # 매일 한국 시간 오후 4시 20분 실행 (UTC 07:20)
     - cron: '20 7 * * *'
-  workflow_dispatch:
+  workflow_dispatch: # 수동 실행 버튼 활성화
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v3
+
     - name: Set up Python
       uses: actions/setup-python@v4
       with:
         python-version: '3.10'
+
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install -r requirements.txt
-    - name: Run AI Model
+        if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+        pip install requests  # 서버 전송을 위해 필요
+
+    - name: Run AI Model & Upload
       env:
-        MY_SERVER_IP: ${{ secrets.MY_SERVER_IP }} # 깃허브 금고에서 IP 꺼내오기!
+        # 깃허브 Settings -> Secrets -> Actions에 'MY_SERVER_IP'라는 이름으로 34.30.112.251 저장 필수!
+        MY_SERVER_IP: ${{ secrets.MY_SERVER_IP }}
       run: python main.py
