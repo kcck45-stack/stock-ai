@@ -1,6 +1,4 @@
-# 1. 필수 패키지 설치 (pykrx 추가)
-!pip install yfinance pykrx "numpy<2.0.0"
-
+import os
 import yfinance as yf
 from pykrx import stock
 import numpy as np
@@ -15,15 +13,20 @@ from tensorflow.keras.layers import Input, LSTM, Dense, Dropout, BatchNormalizat
 from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau
 from tensorflow.keras.regularizers import l2
 
-# [설정] 서버 IP 및 URL
-SERVER_IP = "34.30.112.251"
+# 🛡️ [보안 적용] 깃허브 금고(Secrets)에서 내 서버 IP를 몰래 꺼내옵니다.
+try:
+    SERVER_IP = os.environ["MY_SERVER_IP"]
+except KeyError:
+    print("⚠️ 오류: 깃허브 Secrets에 'MY_SERVER_IP'가 설정되지 않았습니다!")
+    SERVER_IP = "127.0.0.1" # 임시 방어 코드
+
 SERVER_URL = f"http://{SERVER_IP}:8080/upload"
 
 TICKERS = [
     "005930", "000660", "035420", "005380", "035720",
     "000270", "068270", "005490", "105560", "012330",
     "012450", "064350", "103140"
-] # pykrx는 숫자로만 구성된 종목코드를 사용합니다.
+]
 NUM_ENSEMBLE = 5 
 
 @tf.keras.utils.register_keras_serializable()
@@ -42,7 +45,6 @@ def create_windows(X, y, window_size):
 def train_beast_mode_bot():
     final_output = {}
     
-    # 시간 설정 (최근 5년치 수급 데이터)
     end_date = datetime.datetime.now().strftime("%Y%m%d")
     start_date = (datetime.datetime.now() - datetime.timedelta(days=365*5)).strftime("%Y%m%d")
 
@@ -55,28 +57,22 @@ def train_beast_mode_bot():
         try:
             print(f"\n[🔥 {t}] 수급 데이터 결합 및 딥러닝 분석 시작...")
             
-            # 1. 가격 데이터 (yfinance)
             ticker_yf = t + ".KS"
             df_price = yf.download(ticker_yf, period="5y", progress=False)
             if isinstance(df_price.columns, pd.MultiIndex):
                 df_price.columns = df_price.columns.get_level_values(0)
 
-            # 2. 🚀 [핵심 추가] 수급 데이터 (pykrx) - 외국인/기관/개인 순매수량
             print(f"   📊 {t} 외국인/기관 수급 분석 중...")
             df_investor = stock.get_market_net_purchases_of_equities_by_ticker(start_date, end_date, t)
-            # 필요한 수급 지표만 추출
             df_investor = df_investor[['외국인', '기관합계', '개인']]
             df_investor.columns = ['Foreign_Net', 'Inst_Net', 'Retail_Net']
             
-            # 가격과 수급 데이터 합치기
             df = df_price.join(df_investor, how='inner')
 
-            # 지표 계산
             df['Target_Return'] = df['Close'].pct_change().shift(-1) * 100 
             df['SMA_20'] = df['Close'].rolling(window=20).mean()
             df['RSI'] = 100 - (100 / (1 + (df['Close'].diff().clip(lower=0).ewm(alpha=1/14).mean() / (-df['Close'].diff().clip(upper=0)).ewm(alpha=1/14).mean())))
             
-            # 수급 지표 정규화 (거래량 대비 수급 비율)
             df['Foreign_Rate'] = df['Foreign_Net'] / df['Volume']
             df['Inst_Rate'] = df['Inst_Net'] / df['Volume']
             
@@ -86,10 +82,8 @@ def train_beast_mode_bot():
             df['Overnight_Gap'] = (df['Open'] / df['Close'].shift(1) - 1) * 100
             df['Day_of_Week'] = df.index.dayofweek
 
-            # 거시 지표 결합
             df = df.join(market_returns, how='left').ffill()
             
-            # 피처 선정
             feature_cols = ['RSI', 'VWAP_5_Ratio', 'Overnight_Gap', 'Day_of_Week', 
                             'Foreign_Rate', 'Inst_Rate', 'KOSPI', 'SP500', 'VIX', 'SOX_SEMI']
 
@@ -97,11 +91,10 @@ def train_beast_mode_bot():
             X_raw = df_valid[feature_cols].values
             y_raw = df_valid[['Target_Return']].values
 
-            # 데이터 스케일링
             scaler_X = RobustScaler()
             X_scaled = scaler_X.fit_transform(X_raw)
 
-            window_size = 30 # 단타용은 30일 데이터가 더 민감하게 반응함
+            window_size = 30
             X_win, y_win = create_windows(X_scaled, y_raw, window_size)
 
             split = int(len(X_win) * 0.8)
@@ -112,7 +105,6 @@ def train_beast_mode_bot():
             ensemble_losses = []
 
             for i in range(NUM_ENSEMBLE):
-                # Attention 모델 구조
                 inputs = Input(shape=(window_size, len(feature_cols)))
                 x = Conv1D(64, 3, activation='relu')(inputs)
                 x = MaxPooling1D(2)(x)
@@ -134,12 +126,10 @@ def train_beast_mode_bot():
                 ensemble_losses.append(min(history.history['val_loss']))
                 del model; gc.collect(); tf.keras.backend.clear_session()
 
-            # 실력주의 가중치 적용
             weights = 1.0 / (np.array(ensemble_losses) + 1e-6)
             weights /= weights.sum()
             final_pred_return = np.sum(np.array(ensemble_preds) * weights)
             
-            # 결과 저장
             last_price = df['Close'].iloc[-1]
             pred_price = int(last_price * (1 + final_pred_return/100))
             std_dev = np.std(ensemble_preds)
@@ -155,12 +145,14 @@ def train_beast_mode_bot():
         except Exception as e:
             print(f"   ❌ {t} 오류 발생: {e}")
 
-    # 서버 전송
     try:
-        requests.post(SERVER_URL, json=final_output, timeout=20)
-        print("\n🚀 [풀옵션 봇 완료] 수급 데이터가 반영된 최종 분석값이 서버로 전송되었습니다.")
-    except:
-        print("\n⚠️ 서버 전송 실패")
+        response = requests.post(SERVER_URL, json=final_output, timeout=20)
+        if response.status_code == 200:
+            print("\n🚀 [풀옵션 봇 완료] 수급 데이터가 반영된 최종 분석값이 서버로 전송되었습니다.")
+        else:
+            print(f"\n⚠️ 서버 전송 실패. 상태 코드: {response.status_code}")
+    except Exception as e:
+        print(f"\n❌ 서버 전송 중 오류 발생: {e}")
 
-# 실행
-train_beast_mode_bot()
+if __name__ == "__main__":
+    train_beast_mode_bot()
