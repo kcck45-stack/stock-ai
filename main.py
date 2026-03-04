@@ -7,7 +7,6 @@ import requests
 import gc
 import datetime
 import tensorflow as tf
-import FinanceDataReader as fdr
 from sklearn.preprocessing import StandardScaler
 from tensorflow.keras.models import Model
 from tensorflow.keras.layers import Input, LSTM, Dense, Dropout, Attention, GlobalAveragePooling1D
@@ -16,23 +15,20 @@ from tensorflow.keras.layers import Input, LSTM, Dense, Dropout, Attention, Glob
 SERVER_IP = os.environ.get("MY_SERVER_IP", "34.30.112.251") 
 SERVER_URL = f"http://{SERVER_IP}:8080/upload"
 
+# 📊 KOSPI 시가총액 상위 50종목 (하드코딩)
+TICKERS = [
+    "005930.KS", "000660.KS", "373220.KS", "207940.KS", "005380.KS", # 삼성전자, SK하이닉스, LG엔솔, 삼바, 현대차
+    "000270.KS", "068270.KS", "005490.KS", "035420.KS", "051910.KS", # 기아, 셀트리온, POSCO홀딩스, NAVER, LG화학
+    "028260.KS", "006400.KS", "105560.KS", "055550.KS", "035720.KS", # 삼성물산, 삼성SDI, KB금융, 신한지주, 카카오
+    "066570.KS", "012330.KS", "086790.KS", "015760.KS", "032830.KS", # LG전자, 현대모비스, 하나금융지주, 한국전력, 삼성생명
+    "323410.KS", "033780.KS", "003670.KS", "011200.KS", "316140.KS", # 카카오뱅크, KT&G, 포스코퓨처엠, HMM, 우리금융지주
+    "034730.KS", "010130.KS", "018260.KS", "096770.KS", "009150.KS", # SK, 고려아연, 삼성SDS, SK이노베이션, 삼성전기
+    "017670.KS", "010950.KS", "352820.KS", "030200.KS", "003550.KS", # SK텔레콤, S-Oil, 하이브, KT, LG
+    "051900.KS", "036570.KS", "000810.KS", "090430.KS", "086280.KS", # LG생활건강, 엔씨소프트, 삼성화재, 아모레퍼시픽, 현대글로비스
+    "024110.KS", "011170.KS", "004020.KS", "259960.KS", "329180.KS", # 기업은행, 롯데케미칼, 현대제철, 크래프톤, HD현대중공업
+    "005830.KS", "022100.KS", "010140.KS", "138040.KS", "042660.KS"  # DB손해보험, 포스코DX, 삼성중공업, 메리츠금융지주, 한화오션
+]
 NUM_ENSEMBLE = 5 
-
-def get_kospi_top_50():
-    """KOSPI 시가총액 상위 50종목을 실시간으로 가져옵니다."""
-    print("📊 실시간 KOSPI 시가총액 상위 50종목 데이터를 불러옵니다...")
-    # KOSPI 상장 종목 전체 가져오기
-    kospi_df = fdr.StockListing('KOSPI')
-    # 시가총액(Marcap) 기준 내림차순 정렬 후 상위 50개 추출
-    top_50_df = kospi_df.sort_values(by='Marcap', ascending=False).head(50)
-    
-    # yfinance 형식에 맞게 종목코드 뒤에 '.KS' 붙이기
-    tickers = [f"{str(code).zfill(6)}.KS" for code in top_50_df['Code']]
-    
-    # 종목코드와 이름을 매핑해둘 딕셔너리 생성 (출력 시 보기 편하도록)
-    ticker_names = {f"{str(code).zfill(6)}.KS": name for code, name in zip(top_50_df['Code'], top_50_df['Name'])}
-    
-    return tickers, ticker_names
 
 def create_windows(X, y, window_size):
     X_win, y_win = [], []
@@ -50,25 +46,21 @@ def train_true_quant_bot():
     market_df.index = market_df.index.tz_localize(None) 
     market_returns = market_df.pct_change().fillna(0)
 
-    # 📌 실시간 상위 50종목 로드
-    TICKERS, TICKER_NAMES = get_kospi_top_50()
-
     for idx, t in enumerate(TICKERS, 1):
-        stock_name = TICKER_NAMES.get(t, t)
         try:
-            print(f"\n[🚀 {idx}/50] {stock_name}({t}) 퀀트 표준화 딥러닝 분석 시작...")
+            print(f"\n[🚀 {idx}/50 - {t}] 퀀트 표준화 딥러닝 분석 시작...")
             
             df = yf.download(t, period="3y", progress=False) 
             
-            # ⚠️ 야후 파이낸스 IP 차단(HTTP 429) 방지를 위한 휴식 (아주 중요함!)
-            time.sleep(1.5) 
+            # ⚠️ 종목 50개 연속 다운로드 시 야후 IP 차단 방지용 1초 휴식
+            time.sleep(1)
 
             if isinstance(df.columns, pd.MultiIndex):
                 df.columns = df.columns.get_level_values(0)
             df.index = df.index.tz_localize(None)
 
-            if len(df) < 50: # 상장된 지 얼마 안 된 종목 등 데이터가 부족하면 스킵
-                print(f"   ⚠️ {stock_name} 데이터 부족으로 스킵합니다.")
+            if len(df) < 50:
+                print(f"   ⚠️ {t} 상장 기간이 짧아 데이터를 건너뜁니다.")
                 continue
 
             # 타겟은 수익률(%)
@@ -129,31 +121,29 @@ def train_true_quant_bot():
                 ensemble_preds.append(pred_real_return * 1.2)
                 del model; gc.collect(); tf.keras.backend.clear_session()
 
-            final_pred_return = float(np.mean(ensemble_preds))
+            final_pred_return = np.mean(ensemble_preds)
             
             last_price = df['Close'].iloc[-1]
             pred_price = int(last_price * (1 + final_pred_return/100))
             
             std_dev = np.std(ensemble_preds)
-            conf = float(max(50.0, min(99.0, 95.0 - (std_dev * 10.0))))
+            conf = max(50.0, min(99.0, 95.0 - (std_dev * 10.0)))
             
             symbol = t.split('.')[0]
             final_output[symbol] = {
-                "name": stock_name,
                 "pred": f"{pred_price:,}",
                 "expected_return": f"{final_pred_return:.2f}%",
                 "confidence": f"{conf:.1f}점"
             }
-            print(f"   ✅ {stock_name} 완료: 예상가 {pred_price:,}원 ({final_pred_return:.2f}%) | 확신도 {conf:.1f}점")
+            print(f"   ✅ {symbol} 완료: 예상가 {pred_price:,}원 ({final_pred_return:.2f}%) | 확신도 {conf:.1f}점")
 
         except Exception as e:
-            print(f"   ❌ {stock_name}({t}) 오류 발생: {e}")
+            print(f"   ❌ {t} 오류 발생: {e}")
 
-    # 최종 서버 전송 로직
     try:
         response = requests.post(SERVER_URL, json=final_output, timeout=20)
         if response.status_code == 200:
-            print("\n🚀 [최종 자동화 완료] 분석 데이터가 구글 클라우드 서버로 무사히 전송되었습니다.")
+            print("\n🚀 [최종 자동화 완료] 50종목 분석 데이터가 구글 클라우드 서버로 무사히 전송되었습니다.")
         else:
             print(f"\n⚠️ 서버 전송 실패. 상태 코드: {response.status_code}")
     except Exception as e:
