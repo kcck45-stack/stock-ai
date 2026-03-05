@@ -11,11 +11,12 @@ from sklearn.preprocessing import StandardScaler
 from tensorflow.keras.models import Model
 from tensorflow.keras.layers import Input, LSTM, Dense, Dropout, Attention, GlobalAveragePooling1D
 
-# 🛡️ [보안] 깃허브 금고(Secrets)에서 서버 IP 로드 (설정 안 되어 있으면 기본값 사용)
-# 깃허브 Actions의 env 섹션에서 설정한 이름과 동일해야 합니다.
+# 🛡️ 텐서플로우 경고(잔소리) 및 과부하 완벽 차단 설정
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
+tf.get_logger().setLevel('ERROR')
+
 SERVER_IP = os.environ.get("MY_SERVER_IP") 
 
-# 📊 KOSPI 시가총액 상위 50종목 (최신 순서 반영)
 TICKERS = [
     "005930.KS", "000660.KS", "373220.KS", "207940.KS", "005380.KS", 
     "000270.KS", "068270.KS", "005490.KS", "035420.KS", "051910.KS", 
@@ -28,7 +29,7 @@ TICKERS = [
     "024110.KS", "011170.KS", "004020.KS", "259960.KS", "329180.KS", 
     "005830.KS", "022100.KS", "010140.KS", "138040.KS", "042660.KS"
 ]
-NUM_ENSEMBLE = 5  # 정확도를 높이기 위한 앙상블 모델 수
+NUM_ENSEMBLE = 5  
 
 def create_windows(X, y, window_size):
     X_win, y_win = [], []
@@ -39,9 +40,7 @@ def create_windows(X, y, window_size):
 
 def train_true_quant_bot():
     final_output = {}
-    
-    print(f"📡 접속 대상 서버 IP: {SERVER_IP if SERVER_IP else '설정 안됨 (로컬 테스트 모드)'}")
-    
+    print(f"📡 접속 대상 서버 IP: {SERVER_IP if SERVER_IP else '설정 안됨'}")
     print("🌍 글로벌 시장 지수 다운로드 중...")
     market_df = yf.download(["^KS11", "^GSPC", "KRW=X", "^VIX", "^SOX"], period="3y", progress=False)['Close']
     market_df = market_df.rename(columns={"^KS11": "KOSPI", "^GSPC": "SP500", "KRW=X": "EXCHANGE_RATE", "^VIX": "VIX", "^SOX": "SOX_SEMI"})
@@ -51,9 +50,8 @@ def train_true_quant_bot():
     for idx, t in enumerate(TICKERS, 1):
         try:
             print(f"\n[🚀 {idx}/{len(TICKERS)} - {t}] 분석 시작...")
-            
             df = yf.download(t, period="3y", progress=False) 
-            time.sleep(1) # IP 차단 방지
+            time.sleep(1) 
 
             if isinstance(df.columns, pd.MultiIndex):
                 df.columns = df.columns.get_level_values(0)
@@ -61,7 +59,6 @@ def train_true_quant_bot():
 
             if len(df) < 50: continue
 
-            # 지표 계산
             df['Target_Return'] = df['Close'].pct_change().shift(-1) * 100 
             df['SMA_20'] = df['Close'].rolling(window=20).mean()
             df['MACD'] = df['Close'].ewm(span=12).mean() - df['Close'].ewm(span=26).mean()
@@ -72,9 +69,7 @@ def train_true_quant_bot():
 
             df = df.join(market_returns, how='left').ffill()
             
-            feature_cols = ['RSI', 'Overnight_Gap', 'Day_of_Week', 'MACD', 'Momentum_5',
-                            'KOSPI', 'SP500', 'VIX', 'SOX_SEMI']
-
+            feature_cols = ['RSI', 'Overnight_Gap', 'Day_of_Week', 'MACD', 'Momentum_5', 'KOSPI', 'SP500', 'VIX', 'SOX_SEMI']
             df_valid = df.dropna(subset=feature_cols + ['Target_Return'])
             X_raw = df_valid[feature_cols].values
             y_raw = df_valid[['Target_Return']].values
@@ -84,7 +79,6 @@ def train_true_quant_bot():
 
             window_size = 15 
             X_win, y_win = create_windows(X_scaled, y_scaled, window_size)
-
             split = int(len(X_win) * 0.8)
             X_train, y_train = X_win[:split], y_win[:split]
 
@@ -103,7 +97,10 @@ def train_true_quant_bot():
                 model.fit(X_train, y_train, epochs=30, batch_size=32, verbose=0)
                 
                 last_input = X_scaled[-window_size:].reshape(1, window_size, len(feature_cols))
-                pred_scaled = model.predict(last_input, verbose=0)
+                
+                # 💡 핵심 속도 개선: predict 대신 직접 호출로 메모리 누수 방지!
+                pred_scaled = model(last_input, training=False).numpy()
+                
                 ensemble_preds.append(scaler_y.inverse_transform(pred_scaled)[0, 0])
                 del model; gc.collect(); tf.keras.backend.clear_session()
 
@@ -124,7 +121,6 @@ def train_true_quant_bot():
         except Exception as e:
             print(f"   ❌ {t} 오류: {e}")
 
-    # 📤 최종 전송 단계
     if SERVER_IP:
         SERVER_URL = f"http://{SERVER_IP}:8080/upload"
         try:
@@ -136,7 +132,7 @@ def train_true_quant_bot():
         except Exception as e:
             print(f"\n❌ 서버 전송 실패: {e}")
     else:
-        print("\n📢 MY_SERVER_IP 환경변수가 없어 데이터를 전송하지 않았습니다. (로컬 테스트)")
+        print("\n📢 MY_SERVER_IP 환경변수가 없어 데이터를 전송하지 않았습니다.")
 
 if __name__ == "__main__":
     train_true_quant_bot()
