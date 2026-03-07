@@ -1,6 +1,7 @@
 import os
 import time
 import yfinance as yf
+import FinanceDataReader as fdr  # 💡 하이브리드 엔진 추가!
 import numpy as np
 import pandas as pd
 import requests
@@ -66,7 +67,7 @@ def train_true_quant_bot():
         market_df = yf.download(["^KS11", "^GSPC", "KRW=X", "^VIX", "^SOX"], period="3y", progress=False)['Close']
         if isinstance(market_df, pd.DataFrame):
             market_df = market_df.rename(columns={"^KS11": "KOSPI", "^GSPC": "SP500", "KRW=X": "EXCHANGE_RATE", "^VIX": "VIX", "^SOX": "SOX_SEMI"})
-            market_df.index = market_df.index.tz_localize(None) 
+            market_df.index = pd.to_datetime(market_df.index).tz_localize(None) 
             market_returns = market_df.pct_change().fillna(0)
         else:
             market_returns = pd.DataFrame() # 에러 방지
@@ -75,21 +76,31 @@ def train_true_quant_bot():
         print("⚠️ 시장 지수 다운로드 실패. 지수 데이터 없이 진행합니다.")
 
     # ==========================================
-    # 💡 3. AI 딥러닝 앙상블 분석 시작 (회원님 로직)
+    # 💡 3. AI 딥러닝 앙상블 분석 시작 (하이브리드 엔진 적용)
     # ==========================================
     for idx, t in enumerate(TICKERS, 1):
         try:
             print(f"\n[🚀 {idx}/{len(TICKERS)} - {t}] 데이터 수집 및 AI 학습 시작...")
-            df = yf.download(t, period="3y", progress=False) 
-            time.sleep(1) 
+            
+            symbol = t.replace('.KS', '')
+            is_korean = symbol.isdigit()
+            
+            # 하이브리드 데이터 수집!
+            if is_korean:
+                start_date = (datetime.datetime.now() - datetime.timedelta(days=3*365)).strftime('%Y-%m-%d')
+                df = fdr.DataReader(symbol, start_date)
+                time.sleep(0.5)
+            else:
+                df = yf.download(t, period="3y", progress=False) 
+                time.sleep(1) 
+                if isinstance(df.columns, pd.MultiIndex):
+                    df.columns = df.columns.get_level_values(0)
 
             if df.empty or len(df) < 50: 
                 print(f"   ⚠️ {t} 데이터 부족으로 패스합니다.")
                 continue
 
-            if isinstance(df.columns, pd.MultiIndex):
-                df.columns = df.columns.get_level_values(0)
-            df.index = df.index.tz_localize(None)
+            df.index = pd.to_datetime(df.index).tz_localize(None) # 시차 및 타임존 완벽 제거
 
             # 기술적 지표 생성
             df['Target_Return'] = df['Close'].pct_change().shift(-1) * 100 
@@ -97,7 +108,7 @@ def train_true_quant_bot():
             df['MACD'] = df['Close'].ewm(span=12).mean() - df['Close'].ewm(span=26).mean()
             df['Momentum_5'] = df['Close'].pct_change(5) * 100
             
-            # RSI 계산 (예외 처리 추가)
+            # RSI 계산
             delta = df['Close'].diff()
             up = delta.clip(lower=0)
             down = -1 * delta.clip(upper=0)
@@ -165,11 +176,7 @@ def train_true_quant_bot():
             std_dev = np.std(ensemble_preds)
             conf = max(50.0, min(99.0, 95.0 - (std_dev * 10.0)))
             
-            # 티커에서 .KS 제거 (한국/미국 주식 포맷팅)
-            symbol = t.replace('.KS', '')
-            
             # 미국 주식($ 소수점) vs 한국 주식(콤마 정수) 포맷 분기
-            is_korean = symbol.isdigit()
             pred_str = f"{int(pred_price):,}" if is_korean else f"${pred_price:.2f}"
             
             final_output[symbol] = {
