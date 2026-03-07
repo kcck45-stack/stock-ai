@@ -26,6 +26,14 @@ def create_windows(X, y, window_size):
     return np.array(X_win), np.array(y_win)
 
 def train_true_quant_bot():
+    # ==========================================
+    # 💡 [추가됨] 주말 휴장일 자동 감지 및 퇴근 로직
+    # ==========================================
+    now_kst = datetime.datetime.utcnow() + datetime.timedelta(hours=9)
+    if now_kst.weekday() >= 5:  # 5는 토요일, 6은 일요일
+        print(f"오늘은 주말 휴장일입니다. 푹 쉬고 월요일에 뵙겠습니다! 🏖️")
+        return  # 분석을 돌리지 않고 여기서 즉시 봇을 종료합니다.
+
     final_output = {}
     print("🌟 AI Quant Prediction Bot 실행을 시작합니다!")
     print(f"📡 접속 대상 서버 IP: {SERVER_IP if SERVER_IP else '설정 안됨'}")
