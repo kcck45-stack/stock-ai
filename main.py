@@ -1,7 +1,7 @@
 import os
 import time
 import yfinance as yf
-import FinanceDataReader as fdr  # 💡 하이브리드 엔진 추가!
+import FinanceDataReader as fdr
 import numpy as np
 import pandas as pd
 import requests
@@ -27,41 +27,26 @@ def create_windows(X, y, window_size):
     return np.array(X_win), np.array(y_win)
 
 def train_true_quant_bot():
-    # ==========================================
-    # 💡 [추가됨] 주말 휴장일 자동 감지 및 퇴근 로직
-    # ==========================================
     now_kst = datetime.datetime.utcnow() + datetime.timedelta(hours=9)
-    if now_kst.weekday() >= 5:  # 5는 토요일, 6은 일요일
+    if now_kst.weekday() >= 5: 
         print(f"오늘은 주말 휴장일입니다. 푹 쉬고 월요일에 뵙겠습니다! 🏖️")
-        return  # 분석을 돌리지 않고 여기서 즉시 봇을 종료합니다.
+        return 
 
     final_output = {}
-    print("🌟 AI Quant Prediction Bot 실행을 시작합니다!")
-    print(f"📡 접속 대상 서버 IP: {SERVER_IP if SERVER_IP else '설정 안됨'}")
+    print("🌟 [단타 스나이퍼 모드] AI Quant Prediction Bot 실행!")
     
-    # ==========================================
-    # 💡 1. 폰 서버에서 '오늘 분석할 종목 리스트' 동기화
-    # ==========================================
     print("🌐 서버에서 VVIP 종목 리스트를 가져오는 중...")
     try:
         url = f"http://{SERVER_IP}:8080/api/tickers"
         response = requests.get(url, timeout=15)
         response.raise_for_status()
         raw_tickers = response.json()
-        
-        # 야후 파이낸스 형식(.KS)으로 자동 변환
         TICKERS = [f"{t}.KS" if t.isdigit() else t for t in raw_tickers]
-        
-        print(f"✅ 성공! 총 {len(TICKERS)}개의 종목 분석을 시작합니다.")
-        print(f"📋 타겟 종목: {TICKERS}")
+        print(f"✅ 성공! 총 {len(TICKERS)}개의 종목 분석 시작.")
     except Exception as e:
-        print(f"❌ 서버 접속 실패: {e}")
-        print("⚠️ 서버가 꺼져있을 수 있습니다. 비상용 기본 종목으로 테스트합니다.")
+        print("⚠️ 서버 접속 실패. 비상용 기본 종목으로 테스트합니다.")
         TICKERS = ["005930.KS", "000660.KS", "AAPL", "TSLA"]
 
-    # ==========================================
-    # 💡 2. 글로벌 시장 지수 다운로드 (회원님 모델 핵심)
-    # ==========================================
     print("\n🌍 글로벌 시장 지수 다운로드 중...")
     try:
         market_df = yf.download(["^KS11", "^GSPC", "KRW=X", "^VIX", "^SOX"], period="3y", progress=False)['Close']
@@ -70,22 +55,17 @@ def train_true_quant_bot():
             market_df.index = pd.to_datetime(market_df.index).tz_localize(None) 
             market_returns = market_df.pct_change().fillna(0)
         else:
-            market_returns = pd.DataFrame() # 에러 방지
+            market_returns = pd.DataFrame()
     except:
         market_returns = pd.DataFrame()
-        print("⚠️ 시장 지수 다운로드 실패. 지수 데이터 없이 진행합니다.")
 
-    # ==========================================
-    # 💡 3. AI 딥러닝 앙상블 분석 시작 (하이브리드 엔진 적용)
-    # ==========================================
     for idx, t in enumerate(TICKERS, 1):
         try:
-            print(f"\n[🚀 {idx}/{len(TICKERS)} - {t}] 데이터 수집 및 AI 학습 시작...")
+            print(f"\n[🚀 {idx}/{len(TICKERS)} - {t}] 데이터 수집 및 AI 학습 (단타 분류모델)...")
             
             symbol = t.replace('.KS', '')
             is_korean = symbol.isdigit()
             
-            # 하이브리드 데이터 수집!
             if is_korean:
                 start_date = (datetime.datetime.now() - datetime.timedelta(days=3*365)).strftime('%Y-%m-%d')
                 df = fdr.DataReader(symbol, start_date)
@@ -96,19 +76,22 @@ def train_true_quant_bot():
                 if isinstance(df.columns, pd.MultiIndex):
                     df.columns = df.columns.get_level_values(0)
 
-            if df.empty or len(df) < 50: 
-                print(f"   ⚠️ {t} 데이터 부족으로 패스합니다.")
-                continue
+            if df.empty or len(df) < 50: continue
+            df.index = pd.to_datetime(df.index).tz_localize(None)
 
-            df.index = pd.to_datetime(df.index).tz_localize(None) # 시차 및 타임존 완벽 제거
+            # 💡 [핵심 변경] 단타용 타겟 라벨링 (시가 매수 -> 종가 매도)
+            df['Next_Open'] = df['Open'].shift(-1)
+            df['Next_Close'] = df['Close'].shift(-1)
+            df['Intraday_Return'] = (df['Next_Close'] - df['Next_Open']) / df['Next_Open'] * 100
+            
+            # 💡 타겟 클래스: 오르면 1, 떨어지면 0 (완벽한 이분법)
+            df['Target_Class'] = (df['Intraday_Return'] > 0).astype(int)
 
             # 기술적 지표 생성
-            df['Target_Return'] = df['Close'].pct_change().shift(-1) * 100 
             df['SMA_20'] = df['Close'].rolling(window=20).mean()
             df['MACD'] = df['Close'].ewm(span=12).mean() - df['Close'].ewm(span=26).mean()
             df['Momentum_5'] = df['Close'].pct_change(5) * 100
             
-            # RSI 계산
             delta = df['Close'].diff()
             up = delta.clip(lower=0)
             down = -1 * delta.clip(upper=0)
@@ -126,25 +109,23 @@ def train_true_quant_bot():
             else:
                 feature_cols = ['RSI', 'Overnight_Gap', 'Day_of_Week', 'MACD', 'Momentum_5']
                 
-            # 유효한 피처가 실제로 DataFrame에 있는지 확인
             valid_features = [col for col in feature_cols if col in df.columns]
-            df_valid = df.dropna(subset=valid_features + ['Target_Return'])
+            # Next_Open이 NaN인 맨 마지막 줄(오늘)은 정답이 없으니 학습에서 제외
+            df_valid = df.dropna(subset=valid_features + ['Intraday_Return', 'Target_Class'])
             
-            if df_valid.empty:
-                print(f"   ⚠️ {t} 전처리 후 데이터가 없어 패스합니다.")
-                continue
+            if df_valid.empty: continue
 
+            # 입력 피처(X)만 스케일링, 정답(y)은 0 또는 1이므로 그대로 둠
             X_raw = df_valid[valid_features].values
-            y_raw = df_valid[['Target_Return']].values
+            y_raw = df_valid[['Target_Class']].values 
 
-            scaler_X = StandardScaler(); X_scaled = scaler_X.fit_transform(X_raw)
-            scaler_y = StandardScaler(); y_scaled = scaler_y.fit_transform(y_raw)
+            scaler_X = StandardScaler()
+            X_scaled = scaler_X.fit_transform(X_raw)
 
             window_size = 15 
-            if len(X_scaled) <= window_size:
-                continue
+            if len(X_scaled) <= window_size: continue
                 
-            X_win, y_win = create_windows(X_scaled, y_scaled, window_size)
+            X_win, y_win = create_windows(X_scaled, y_raw, window_size)
             split = int(len(X_win) * 0.8)
             X_train, y_train = X_win[:split], y_win[:split]
 
@@ -156,54 +137,66 @@ def train_true_quant_bot():
                 x = GlobalAveragePooling1D()(att_out)
                 x = Dense(32, activation='relu')(x)
                 x = Dropout(0.2)(x)
-                outputs = Dense(1, activation='linear')(x)
+                
+                # 💡 [핵심 변경] 확률을 뱉는 Sigmoid 사용
+                outputs = Dense(1, activation='sigmoid')(x)
                 
                 model = Model(inputs=inputs, outputs=outputs)
-                model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=0.002), loss='mse')
+                # 💡 [핵심 변경] 회귀(MSE)가 아닌 이진 분류(binary_crossentropy) 사용
+                model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=0.002), loss='binary_crossentropy', metrics=['accuracy'])
                 model.fit(X_train, y_train, epochs=30, batch_size=32, verbose=0)
                 
-                last_input = X_scaled[-window_size:].reshape(1, window_size, len(valid_features))
+                # 오늘장 마감 후, 내일의 단타 수익 확률 예측!
+                last_input = scaler_X.transform(df[valid_features].values[-window_size:]).reshape(1, window_size, len(valid_features))
+                prob_up = model(last_input, training=False).numpy()[0, 0]
+                ensemble_preds.append(prob_up)
                 
-                # 메모리 누수 방지 로직 (회원님 코드 유지)
-                pred_scaled = model(last_input, training=False).numpy()
-                ensemble_preds.append(scaler_y.inverse_transform(pred_scaled)[0, 0])
                 del model; gc.collect(); tf.keras.backend.clear_session()
 
-            final_pred_return = np.mean(ensemble_preds)
+            # 💡 [결과 가공] 앙상블 상승 확률 평균 (0.0 ~ 1.0)
+            final_prob_up = np.mean(ensemble_preds)
+            
+            # 과거 평균 상승률/하락률 (현실적인 예상 수익률 제공용)
+            avg_up_return = df_valid[df_valid['Target_Class'] == 1]['Intraday_Return'].mean()
+            avg_down_return = df_valid[df_valid['Target_Class'] == 0]['Intraday_Return'].mean()
+            if np.isnan(avg_up_return): avg_up_return = 1.0
+            if np.isnan(avg_down_return): avg_down_return = -1.0
+
+            # 상승 우세 vs 하락 우세 판단
+            if final_prob_up >= 0.5:
+                conf = final_prob_up * 100  # 상승 확률 자체가 확신도
+                expected_return = avg_up_return * final_prob_up
+                direction = "📈 상승"
+            else:
+                conf = (1 - final_prob_up) * 100  # 하락 확률 자체가 확신도
+                expected_return = avg_down_return * (1 - final_prob_up)
+                direction = "📉 하락"
+
             last_price = float(df['Close'].iloc[-1])
-            pred_price = last_price * (1 + final_pred_return/100)
+            pred_price = last_price * (1 + expected_return/100)
             
-            std_dev = np.std(ensemble_preds)
-            conf = max(50.0, min(99.0, 95.0 - (std_dev * 10.0)))
-            
-            # 미국 주식($ 소수점) vs 한국 주식(콤마 정수) 포맷 분기
             pred_str = f"{int(pred_price):,}" if is_korean else f"${pred_price:.2f}"
             
             final_output[symbol] = {
                 "pred": pred_str,
-                "expected_return": f"{final_pred_return:.2f}%",
+                "expected_return": f"{expected_return:.2f}%",
                 "confidence": f"{conf:.1f}점"
             }
-            print(f"   ✅ {symbol} 분석완료 (예측가: {pred_str}, 확신도: {conf:.1f}점)")
+            print(f"   🎯 {direction} 예측! (확률/확신도: {conf:.1f}점, 가상 예측가: {pred_str})")
 
         except Exception as e:
             print(f"   ❌ {t} 오류: {e}")
 
-    # ==========================================
-    # 💡 4. 폰 서버로 최종 결과물 발사!
-    # ==========================================
     if SERVER_IP and final_output:
         SERVER_URL = f"http://{SERVER_IP}:8080/upload"
         try:
             response = requests.post(SERVER_URL, json=final_output, timeout=30)
             if response.status_code == 200:
-                print(f"\n🚀 전송 완료! 서버({SERVER_IP})에 데이터가 완벽하게 업데이트되었습니다.")
+                print(f"\n🚀 전송 완료! 단타 스나이퍼 데이터가 업데이트되었습니다.")
             else:
                 print(f"\n⚠️ 서버 응답 에러 (상태코드: {response.status_code})")
         except Exception as e:
             print(f"\n❌ 서버 전송 실패: {e}")
-    else:
-        print("\n📢 서버 IP가 없거나 분석된 데이터가 없어 전송하지 않았습니다.")
 
 if __name__ == "__main__":
     train_true_quant_bot()
