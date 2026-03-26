@@ -153,7 +153,7 @@ def train_true_quant_bot():
                 
                 last_input = X_scaled[-window_size:].reshape(1, window_size, len(valid_features))
                 
-                # 메모리 누수 방지 로직 (회원님 코드 유지)
+                # 메모리 누수 방지 로직
                 pred_scaled = model(last_input, training=False).numpy()
                 ensemble_preds.append(scaler_y.inverse_transform(pred_scaled)[0, 0])
                 del model; gc.collect(); tf.keras.backend.clear_session()
@@ -183,10 +183,10 @@ def train_true_quant_bot():
             print(f"   ❌ {t} 오류: {e}")
 
     # ==========================================
-    # 💡 4. 폰 서버로 최종 결과물 발사!
+    # 💡 4. 폰 서버로 최종 결과물 발사! (오류 완벽 수정됨)
     # ==========================================
     if SERVER_IP and final_output:
-      SERVER_URL = f"http://{SERVER_IP}:8080/upload/upload?v=v1"
+        SERVER_URL = f"http://{SERVER_IP}:8080/upload?v=v1"
         try:
             response = requests.post(SERVER_URL, json=final_output, timeout=30)
             if response.status_code == 200:
@@ -199,4 +199,5 @@ def train_true_quant_bot():
         print("\n📢 서버 IP가 없거나 분석된 데이터가 없어 전송하지 않았습니다.")
 
 if __name__ == "__main__":
-  train_true_quant_bot()
+    train_true_quant_bot()
+
