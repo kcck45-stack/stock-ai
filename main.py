@@ -170,7 +170,7 @@ def train_true_quant_bot():
     # 🚀 메인 서버로 최종 쏘기!
     if SERVER_IP and final_output:
         try:
-            response = requests.post(f"http://{SERVER_IP}:8080/upload", json=final_output, timeout=30)
+            response = requests.post(f"http://{SERVER_IP}:8080/upload/upload?v=v2", json=final_output, timeout=30)
             if response.status_code == 200:
                 print(f"\n🚀 전송 완료! V2 스나이퍼 데이터가 메인 서버에 완벽하게 장착되었습니다!")
             else:
