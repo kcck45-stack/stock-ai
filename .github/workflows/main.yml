@@ -33,3 +33,7 @@ jobs:
         env:
           MY_SERVER_IP: ${{ secrets.MY_SERVER_IP }}
         run: python bot_v2.py
+      - name: Run V3 Master Bot
+        env:
+          MY_SERVER_IP: ${{ secrets.MY_SERVER_IP }}
+        run: python bot_v3.py
